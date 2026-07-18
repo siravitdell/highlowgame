@@ -1,0 +1,71 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Category {
+  id     String @id @default(cuid())
+  group  String
+  metric String
+  unit   String
+  label  String
+
+  items  Item[]
+  scores Score[]
+  lobbies Lobby[]
+
+  @@unique([group, metric])
+}
+
+model Item {
+  id         String   @id @default(cuid())
+  name       String
+  value      Float
+  metric     String
+  unit       String
+  imageUrl   String?
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  @@index([categoryId])
+}
+
+model Score {
+  id         String   @id @default(cuid())
+  playerName String
+  score      Int
+  categoryId String
+  category   Category @relation(fields: [categoryId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@index([categoryId])
+}
+
+model Lobby {
+  id         String   @id @default(cuid())
+  roomCode   String   @unique
+  hostId     String
+  status     String   @default("waiting")
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id])
+  createdAt  DateTime @default(now())
+
+  players Player[]
+}
+
+model Player {
+  id        String  @id @default(cuid())
+  username  String
+  lobbyId   String
+  lobby     Lobby   @relation(fields: [lobbyId], references: [id])
+  score     Int     @default(0)
+  isHost    Boolean @default(false)
+  isReady   Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([lobbyId])
+}
