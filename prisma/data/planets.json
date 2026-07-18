@@ -1,0 +1,16 @@
+[
+  { "name": "Mercury", "diameter": 4879, "distance": 57.9 },
+  { "name": "Venus", "diameter": 12104, "distance": 108.2 },
+  { "name": "Earth", "diameter": 12742, "distance": 149.6 },
+  { "name": "Mars", "diameter": 6779, "distance": 227.9 },
+  { "name": "Jupiter", "diameter": 139820, "distance": 778.5 },
+  { "name": "Saturn", "diameter": 116460, "distance": 1434.0 },
+  { "name": "Uranus", "diameter": 50724, "distance": 2871.0 },
+  { "name": "Neptune", "diameter": 49244, "distance": 4495.0 },
+  { "name": "Pluto", "diameter": 2377, "distance": 5906.4 },
+  { "name": "Moon", "diameter": 3474, "distance": 149.6 },
+  { "name": "Ceres", "diameter": 946, "distance": 413.7 },
+  { "name": "Eris", "diameter": 2326, "distance": 10125.0 },
+  { "name": "Haumea", "diameter": 1632, "distance": 6452.0 },
+  { "name": "Makemake", "diameter": 1430, "distance": 6850.0 }
+]
