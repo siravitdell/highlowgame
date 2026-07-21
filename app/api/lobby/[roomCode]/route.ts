@@ -30,15 +30,39 @@ function isJoinLobbyBody(value: unknown): value is JoinLobbyBody {
   return typeof body.username === "string";
 }
 
+interface FinishGameResult {
+  playerId: string;
+  score: number;
+}
+
 interface UpdateLobbyBody {
-  action: "select-category" | "start-game";
+  action: "select-category" | "start-game" | "finish-game";
   categoryId?: string;
+  results?: FinishGameResult[];
+  tiebreakerWinnerId?: string;
 }
 
 function isUpdateLobbyBody(value: unknown): value is UpdateLobbyBody {
   if (typeof value !== "object" || value === null) return false;
   const body = value as Record<string, unknown>;
-  return body.action === "select-category" || body.action === "start-game";
+  return (
+    body.action === "select-category" ||
+    body.action === "start-game" ||
+    body.action === "finish-game"
+  );
+}
+
+function isFinishGameResults(value: unknown): value is FinishGameResult[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (r) =>
+        typeof r === "object" &&
+        r !== null &&
+        typeof (r as Record<string, unknown>).playerId === "string" &&
+        typeof (r as Record<string, unknown>).score === "number"
+    )
+  );
 }
 
 export async function GET(
@@ -164,6 +188,27 @@ export async function PATCH(
     await publishBestEffort(channel, "game-start", {});
 
     return NextResponse.json({ status: "playing" });
+  }
+
+  if (body.action === "finish-game") {
+    if (!isFinishGameResults(body.results)) {
+      return NextResponse.json({ error: "results are required" }, { status: 400 });
+    }
+
+    await prisma.$transaction([
+      ...body.results.map((r) =>
+        prisma.player.update({ where: { id: r.playerId }, data: { score: r.score } })
+      ),
+      prisma.lobby.update({
+        where: { id: lobby.id },
+        data: {
+          status: "finished",
+          tiebreakerWinnerId: body.tiebreakerWinnerId ?? null,
+        },
+      }),
+    ]);
+
+    return NextResponse.json({ status: "finished" });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });

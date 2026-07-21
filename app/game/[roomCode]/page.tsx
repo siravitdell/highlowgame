@@ -188,6 +188,26 @@ export default function GamePage({ params }: GamePageProps) {
     );
   }
 
+  async function persistFinalResults(tiebreakerWinnerId?: string) {
+    if (!lobby) return;
+    try {
+      await fetch(`/api/lobby/${roomCode}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "finish-game",
+          results: lobby.players.map((p) => ({
+            playerId: p.id,
+            score: scoresRef.current[p.id]?.score ?? 0,
+          })),
+          tiebreakerWinnerId,
+        }),
+      });
+    } catch (err) {
+      console.error("Failed to persist final results:", err);
+    }
+  }
+
   function resolveTiebreaker() {
     if (!channel || tiebreakResolvedRef.current) return;
     tiebreakResolvedRef.current = true;
@@ -203,7 +223,7 @@ export default function GamePage({ params }: GamePageProps) {
       const winnerId = correctPlayers[0];
       const username = lobby?.players.find((p) => p.id === winnerId)?.username ?? "";
       const result: TiebreakerResultEvent = { winnerId, username };
-      publishSafe(channel, "tiebreaker-result", result);
+      persistFinalResults(winnerId).then(() => publishSafe(channel, "tiebreaker-result", result));
     } else {
       const result: TiebreakerResultEvent = { stillTied: true };
       publishSafe(channel, "tiebreaker-result", result);
@@ -223,7 +243,7 @@ export default function GamePage({ params }: GamePageProps) {
     const tied = entries.filter((e) => e.score === topScore);
 
     if (tied.length <= 1) {
-      publishSafe(channel, "game-end", {});
+      persistFinalResults().then(() => publishSafe(channel, "game-end", {}));
     } else {
       startTiebreakerRound(tied.map((t) => t.playerId));
     }

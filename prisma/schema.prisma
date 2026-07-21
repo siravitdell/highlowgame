@@ -46,13 +46,14 @@ model Score {
 }
 
 model Lobby {
-  id         String   @id @default(cuid())
-  roomCode   String   @unique
-  hostId     String
-  status     String   @default("waiting")
-  categoryId String?
-  category   Category? @relation(fields: [categoryId], references: [id])
-  createdAt  DateTime @default(now())
+  id                 String    @id @default(cuid())
+  roomCode           String    @unique
+  hostId             String
+  status             String    @default("waiting")
+  categoryId         String?
+  category           Category? @relation(fields: [categoryId], references: [id])
+  tiebreakerWinnerId String?
+  createdAt          DateTime  @default(now())
 
   players Player[]
 }

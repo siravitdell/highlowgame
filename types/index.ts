@@ -40,6 +40,7 @@ export interface Lobby {
   status: "waiting" | "playing" | "finished";
   categoryId: string | null;
   category: Category | null;
+  tiebreakerWinnerId: string | null;
   players: Player[];
 }
 
@@ -88,4 +89,8 @@ export interface TiebreakerAnswerEvent {
 
 export interface PlayerFinishedEvent {
   playerId: string;
+}
+
+export interface PlayAgainEvent {
+  roomCode: string;
 }
