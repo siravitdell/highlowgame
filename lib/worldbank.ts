@@ -13,7 +13,7 @@ export interface WorldBankItem {
 }
 
 async function fetchIndicator(indicator: string): Promise<WorldBankItem[]> {
-  const url = `https://api.worldbank.org/v2/country/all/indicator/${indicator}?format=json&per_page=300&mrnev=1`;
+  const url = `https://api.worldbank.org/v2/country/all/indicator/${indicator}?format=json&per_page=300&mrv=1`;
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`World Bank API request failed: ${res.status}`);

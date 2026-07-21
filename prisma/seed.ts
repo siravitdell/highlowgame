@@ -1,11 +1,24 @@
 import { PrismaClient } from "@prisma/client";
-import mountains from "./data/mountains.json";
-import planets from "./data/planets.json";
-import cities from "./data/cities.json";
+import fs from "fs";
+import path from "path";
 import { fetchCountriesPopulation, fetchCountriesGDP } from "../lib/worldbank";
 import { fetchCountriesArea } from "../lib/restcountries";
 
 const prisma = new PrismaClient();
+
+function readJson<T>(relativePath: string): T {
+  return JSON.parse(
+    fs.readFileSync(path.join(__dirname, relativePath), "utf-8")
+  ) as T;
+}
+
+const mountains = readJson<{ name: string; value: number }[]>("data/mountains.json");
+const planets = readJson<{ name: string; diameter: number; distance: number }[]>(
+  "data/planets.json"
+);
+const cities = readJson<{ name: string; population: number; elevation: number }[]>(
+  "data/cities.json"
+);
 
 interface CategoryDef {
   group: string;
