@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Ably from "ably";
+import Ably from "ably/promises";
 
 export function useAblyChannel(
   channelName: string,
   clientId: string
-): Ably.Types.RealtimeChannelCallbacks | null {
-  const [channel, setChannel] = useState<Ably.Types.RealtimeChannelCallbacks | null>(null);
-  const clientRef = useRef<Ably.Realtime | null>(null);
+): Ably.Types.RealtimeChannelPromise | null {
+  const [channel, setChannel] = useState<Ably.Types.RealtimeChannelPromise | null>(null);
+  const clientRef = useRef<Ably.Types.RealtimePromise | null>(null);
 
   useEffect(() => {
     const client = new Ably.Realtime({

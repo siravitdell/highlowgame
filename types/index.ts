@@ -80,3 +80,12 @@ export interface TiebreakerStartEvent {
 export type TiebreakerResultEvent =
   | { winnerId: string; username: string; stillTied?: false }
   | { stillTied: true };
+
+export interface TiebreakerAnswerEvent {
+  playerId: string;
+  correct: boolean;
+}
+
+export interface PlayerFinishedEvent {
+  playerId: string;
+}

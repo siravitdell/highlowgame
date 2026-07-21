@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type Ably from "ably";
 type Message = Ably.Types.Message;
@@ -8,12 +8,14 @@ import { useAblyChannel } from "@/lib/useAblyChannel";
 import { seededRandom } from "@/lib/seededRandom";
 import { ScoreboardStrip } from "@/components/ScoreboardStrip";
 import { Timer } from "@/components/Timer";
-import { ROUNDS_PER_GAME, ROUND_TIMER_SECONDS } from "@/lib/categories";
+import { ROUNDS_PER_GAME, ROUND_TIMER_SECONDS, TIEBREAKER_TIMER_SECONDS } from "@/lib/categories";
 import type {
   Item,
   Lobby,
+  PlayerFinishedEvent,
   ScoreUpdateEvent,
   StoredSession,
+  TiebreakerAnswerEvent,
   TiebreakerResultEvent,
   TiebreakerStartEvent,
 } from "@/types";
@@ -31,6 +33,18 @@ function shuffle<T>(items: T[], rand: () => number): T[] {
   return arr;
 }
 
+async function publishSafe(
+  channel: Ably.Types.RealtimeChannelPromise,
+  event: string,
+  data: unknown
+) {
+  try {
+    await channel.publish(event, data);
+  } catch (err) {
+    console.error(`Failed to publish "${event}":`, err);
+  }
+}
+
 export default function GamePage({ params }: GamePageProps) {
   const { roomCode } = params;
   const router = useRouter();
@@ -43,14 +57,34 @@ export default function GamePage({ params }: GamePageProps) {
   const [lastCorrect, setLastCorrect] = useState<boolean | null>(null);
   const [secondsLeft, setSecondsLeft] = useState(ROUND_TIMER_SECONDS);
   const [scores, setScores] = useState<Record<string, { username: string; score: number }>>({});
-  const [phase, setPhase] = useState<"loading" | "playing" | "waiting" | "tiebreaker" | "done">(
-    "loading"
-  );
+  const [phase, setPhase] = useState<
+    "loading" | "playing" | "waiting" | "tiebreaker" | "done"
+  >("loading");
   const [tiebreaker, setTiebreaker] = useState<TiebreakerStartEvent | null>(null);
+  const [tiebreakAnswered, setTiebreakAnswered] = useState(false);
+  const [tiebreakSecondsLeft, setTiebreakSecondsLeft] = useState(TIEBREAKER_TIMER_SECONDS);
 
   const channel = useAblyChannel(`room:${roomCode}`, session?.playerId ?? "guest");
   const myScoreRef = useRef(0);
-  const answeredRef = useRef(false);
+  const scoresRef = useRef(scores);
+  const itemsPoolRef = useRef<Item[]>([]);
+  const tiebreakCursorRef = useRef(0);
+  const finishedPlayersRef = useRef<Set<string>>(new Set());
+  const gameResolvedRef = useRef(false);
+  const tiebreakAnswersRef = useRef<Map<string, boolean>>(new Map());
+  const tiebreakTiedIdsRef = useRef<string[]>([]);
+  const tiebreakResolvedRef = useRef(true);
+  const tiebreakTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tiebreakAnsweredRef = useRef(false);
+
+  useEffect(() => {
+    scoresRef.current = scores;
+  }, [scores]);
+
+  const isHost = useMemo(
+    () => lobby?.players.find((p) => p.id === session?.playerId)?.isHost ?? false,
+    [lobby, session]
+  );
 
   useEffect(() => {
     const raw = localStorage.getItem("hol-session");
@@ -81,6 +115,8 @@ export default function GamePage({ params }: GamePageProps) {
 
       const rand = seededRandom(roomCode);
       const shuffled = shuffle(itemsData.items, rand);
+      itemsPoolRef.current = shuffled;
+
       const builtPairs: [Item, Item][] = [];
       for (let i = 0; i < ROUNDS_PER_GAME; i++) {
         const a = shuffled[(i * 2) % shuffled.length];
@@ -88,6 +124,7 @@ export default function GamePage({ params }: GamePageProps) {
         builtPairs.push([a, b]);
       }
       setPairs(builtPairs);
+      tiebreakCursorRef.current = ROUNDS_PER_GAME * 2;
 
       const initialScores: Record<string, { username: string; score: number }> = {};
       for (const p of lobbyData.lobby.players) {
@@ -108,10 +145,92 @@ export default function GamePage({ params }: GamePageProps) {
     }
     const t = setTimeout(() => setSecondsLeft((s) => s - 1), 1000);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, secondsLeft, revealed]);
 
   useEffect(() => {
+    if (phase !== "tiebreaker" || tiebreakAnswered) return;
+    if (tiebreakSecondsLeft <= 0) {
+      handleTiebreakerAnswer(null);
+      return;
+    }
+    const t = setTimeout(() => setTiebreakSecondsLeft((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, tiebreakSecondsLeft, tiebreakAnswered]);
+
+  function getNextTiebreakPair(): [Item, Item] {
+    const pool = itemsPoolRef.current;
+    const i = tiebreakCursorRef.current;
+    const a = pool[i % pool.length];
+    const b = pool[(i + 1) % pool.length];
+    tiebreakCursorRef.current += 2;
+    return [a, b];
+  }
+
+  function startTiebreakerRound(tiedPlayerIds: string[]) {
     if (!channel) return;
+    tiebreakAnswersRef.current = new Map();
+    tiebreakTiedIdsRef.current = tiedPlayerIds;
+    tiebreakResolvedRef.current = false;
+
+    const [itemA, itemB] = getNextTiebreakPair();
+    const event: TiebreakerStartEvent = {
+      tiedPlayerIds,
+      question: { itemA, itemB },
+    };
+    publishSafe(channel, "tiebreaker-start", event);
+
+    if (tiebreakTimeoutRef.current) clearTimeout(tiebreakTimeoutRef.current);
+    tiebreakTimeoutRef.current = setTimeout(
+      () => resolveTiebreaker(),
+      (TIEBREAKER_TIMER_SECONDS + 2) * 1000
+    );
+  }
+
+  function resolveTiebreaker() {
+    if (!channel || tiebreakResolvedRef.current) return;
+    tiebreakResolvedRef.current = true;
+    if (tiebreakTimeoutRef.current) {
+      clearTimeout(tiebreakTimeoutRef.current);
+      tiebreakTimeoutRef.current = null;
+    }
+
+    const tiedIds = tiebreakTiedIdsRef.current;
+    const correctPlayers = tiedIds.filter((id) => tiebreakAnswersRef.current.get(id) === true);
+
+    if (correctPlayers.length === 1) {
+      const winnerId = correctPlayers[0];
+      const username = lobby?.players.find((p) => p.id === winnerId)?.username ?? "";
+      const result: TiebreakerResultEvent = { winnerId, username };
+      publishSafe(channel, "tiebreaker-result", result);
+    } else {
+      const result: TiebreakerResultEvent = { stillTied: true };
+      publishSafe(channel, "tiebreaker-result", result);
+      setTimeout(() => startTiebreakerRound(tiedIds), 1200);
+    }
+  }
+
+  function decideOutcome() {
+    if (!channel || !lobby || gameResolvedRef.current) return;
+    gameResolvedRef.current = true;
+
+    const entries = lobby.players.map((p) => ({
+      playerId: p.id,
+      score: scoresRef.current[p.id]?.score ?? 0,
+    }));
+    const topScore = Math.max(...entries.map((e) => e.score), 0);
+    const tied = entries.filter((e) => e.score === topScore);
+
+    if (tied.length <= 1) {
+      publishSafe(channel, "game-end", {});
+    } else {
+      startTiebreakerRound(tied.map((t) => t.playerId));
+    }
+  }
+
+  useEffect(() => {
+    if (!channel || !lobby) return;
 
     const onScoreUpdate = (msg: Message) => {
       const data = msg.data as ScoreUpdateEvent;
@@ -121,14 +240,34 @@ export default function GamePage({ params }: GamePageProps) {
       }));
     };
 
+    const onPlayerFinished = (msg: Message) => {
+      const data = msg.data as PlayerFinishedEvent;
+      finishedPlayersRef.current.add(data.playerId);
+      if (isHost && finishedPlayersRef.current.size >= lobby.players.length) {
+        decideOutcome();
+      }
+    };
+
     const onTiebreakerStart = (msg: Message) => {
       const data = msg.data as TiebreakerStartEvent;
       setTiebreaker(data);
-      answeredRef.current = false;
+      tiebreakTiedIdsRef.current = data.tiedPlayerIds;
+      tiebreakAnsweredRef.current = false;
+      setTiebreakAnswered(false);
+      setTiebreakSecondsLeft(TIEBREAKER_TIMER_SECONDS);
       if (session && data.tiedPlayerIds.includes(session.playerId)) {
         setPhase("tiebreaker");
       } else {
         setPhase("waiting");
+      }
+    };
+
+    const onTiebreakerAnswer = (msg: Message) => {
+      const data = msg.data as TiebreakerAnswerEvent;
+      tiebreakAnswersRef.current.set(data.playerId, data.correct);
+      const tiedIds = tiebreakTiedIdsRef.current;
+      if (isHost && tiedIds.length > 0 && tiedIds.every((id) => tiebreakAnswersRef.current.has(id))) {
+        resolveTiebreaker();
       }
     };
 
@@ -141,21 +280,27 @@ export default function GamePage({ params }: GamePageProps) {
     };
 
     const onGameEnd = () => {
+      setPhase("done");
       router.push(`/results/${roomCode}`);
     };
 
     channel.subscribe("score-update", onScoreUpdate);
+    channel.subscribe("player-finished", onPlayerFinished);
     channel.subscribe("tiebreaker-start", onTiebreakerStart);
+    channel.subscribe("tiebreaker-answer", onTiebreakerAnswer);
     channel.subscribe("tiebreaker-result", onTiebreakerResult);
     channel.subscribe("game-end", onGameEnd);
 
     return () => {
       channel.unsubscribe("score-update", onScoreUpdate);
+      channel.unsubscribe("player-finished", onPlayerFinished);
       channel.unsubscribe("tiebreaker-start", onTiebreakerStart);
+      channel.unsubscribe("tiebreaker-answer", onTiebreakerAnswer);
       channel.unsubscribe("tiebreaker-result", onTiebreakerResult);
       channel.unsubscribe("game-end", onGameEnd);
     };
-  }, [channel, session, roomCode, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channel, lobby, session, roomCode, router, isHost]);
 
   async function handleAnswer(guess: "higher" | "lower" | null) {
     if (revealed || !session || !channel) return;
@@ -182,7 +327,7 @@ export default function GamePage({ params }: GamePageProps) {
       username: session.username,
       score: myScoreRef.current,
     };
-    await channel.publish("score-update", event);
+    await publishSafe(channel, "score-update", event);
 
     setTimeout(() => {
       if (round + 1 >= ROUNDS_PER_GAME) {
@@ -200,59 +345,38 @@ export default function GamePage({ params }: GamePageProps) {
     if (!session || !lobby || !channel) return;
 
     if (lobby.category) {
-      await fetch("/api/scores", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          playerName: session.username,
-          score: myScoreRef.current,
-          categoryId: lobby.category.id,
-        }),
-      });
-    }
-
-    const isHost = lobby.players.find((p) => p.id === session.playerId)?.isHost ?? false;
-
-    if (!isHost) {
-      setPhase("waiting");
-      return;
-    }
-
-    setTimeout(async () => {
-      const entries = Object.entries(scores).map(([playerId, s]) => ({
-        playerId,
-        ...s,
-      }));
-      const topScore = Math.max(...entries.map((e) => e.score), 0);
-      const tied = entries.filter((e) => e.score === topScore);
-
-      if (tied.length > 1 && pairs.length > 0) {
-        const rand = seededRandom(roomCode + "-tiebreak-0");
-        const idx = Math.floor(rand() * pairs.length);
-        const event: TiebreakerStartEvent = {
-          tiedPlayerIds: tied.map((t) => t.playerId),
-          question: { itemA: pairs[idx][0], itemB: pairs[idx][1] },
-        };
-        await channel.publish("tiebreaker-start", event);
-      } else {
-        await channel.publish("game-end", {});
+      try {
+        await fetch("/api/scores", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playerName: session.username,
+            score: myScoreRef.current,
+            categoryId: lobby.category.id,
+          }),
+        });
+      } catch (err) {
+        console.error("Failed to save score:", err);
       }
-    }, 800);
+    }
+
+    await publishSafe(channel, "player-finished", { playerId: session.playerId });
+    setPhase("waiting");
   }
 
-  async function handleTiebreakerAnswer(guess: "higher" | "lower") {
-    if (!tiebreaker || !session || !channel || answeredRef.current) return;
-    answeredRef.current = true;
+  async function handleTiebreakerAnswer(guess: "higher" | "lower" | null) {
+    if (!tiebreaker || !session || !channel || tiebreakAnsweredRef.current) return;
+    tiebreakAnsweredRef.current = true;
+    setTiebreakAnswered(true);
 
     const { itemA, itemB } = tiebreaker.question;
     const correct =
-      (guess === "higher" && itemB.value >= itemA.value) ||
-      (guess === "lower" && itemB.value <= itemA.value);
+      guess !== null &&
+      ((guess === "higher" && itemB.value >= itemA.value) ||
+        (guess === "lower" && itemB.value <= itemA.value));
 
-    if (correct) {
-      const result: TiebreakerResultEvent = { winnerId: session.playerId, username: session.username };
-      await channel.publish("tiebreaker-result", result);
-    }
+    const event: TiebreakerAnswerEvent = { playerId: session.playerId, correct };
+    await publishSafe(channel, "tiebreaker-answer", event);
   }
 
   if (!lobby || phase === "loading") {
@@ -266,7 +390,9 @@ export default function GamePage({ params }: GamePageProps) {
   if (phase === "waiting") {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-4">
-        <p className="text-lg text-gray-600">Waiting for other players to finish…</p>
+        <p className="text-lg text-gray-600">
+          {tiebreaker ? "Waiting for tiebreaker…" : "Waiting for other players to finish…"}
+        </p>
         <ScoreboardStrip
           scores={Object.entries(scores).map(([playerId, s]) => ({ playerId, ...s }))}
         />
@@ -287,6 +413,7 @@ export default function GamePage({ params }: GamePageProps) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-amber-50 px-4">
         <h2 className="text-2xl font-bold text-amber-700">⚡ Tiebreaker Round ⚡</h2>
+        <Timer secondsLeft={tiebreakSecondsLeft} totalSeconds={TIEBREAKER_TIMER_SECONDS} />
         <div className="flex w-full max-w-2xl gap-4">
           <div className="flex-1 rounded-2xl bg-white p-6 text-center shadow">
             <p className="text-lg font-semibold">{itemA.name}</p>
@@ -302,17 +429,22 @@ export default function GamePage({ params }: GamePageProps) {
         <div className="flex gap-4">
           <button
             onClick={() => handleTiebreakerAnswer("higher")}
-            className="rounded-lg bg-amber-600 px-8 py-3 font-semibold text-white hover:bg-amber-700"
+            disabled={tiebreakAnswered}
+            className="rounded-lg bg-amber-600 px-8 py-3 font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
           >
             Higher
           </button>
           <button
             onClick={() => handleTiebreakerAnswer("lower")}
-            className="rounded-lg bg-amber-600 px-8 py-3 font-semibold text-white hover:bg-amber-700"
+            disabled={tiebreakAnswered}
+            className="rounded-lg bg-amber-600 px-8 py-3 font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
           >
             Lower
           </button>
         </div>
+        {tiebreakAnswered && (
+          <p className="text-sm text-amber-700">Answer locked in — waiting for other players…</p>
+        )}
       </div>
     );
   }

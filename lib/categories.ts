@@ -21,4 +21,5 @@ export const CATEGORY_DEFS: CategoryDef[] = [
 
 export const ROUNDS_PER_GAME = 10;
 export const ROUND_TIMER_SECONDS = 15;
+export const TIEBREAKER_TIMER_SECONDS = 15;
 export const MAX_PLAYERS = 8;
