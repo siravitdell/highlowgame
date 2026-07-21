@@ -59,14 +59,15 @@ model Lobby {
 }
 
 model Player {
-  id        String  @id @default(cuid())
-  username  String
-  lobbyId   String
-  lobby     Lobby   @relation(fields: [lobbyId], references: [id])
-  score     Int     @default(0)
-  isHost    Boolean @default(false)
-  isReady   Boolean @default(false)
-  createdAt DateTime @default(now())
+  id         String    @id @default(cuid())
+  username   String
+  lobbyId    String
+  lobby      Lobby     @relation(fields: [lobbyId], references: [id])
+  score      Int       @default(0)
+  isHost     Boolean   @default(false)
+  isReady    Boolean   @default(false)
+  finishedAt DateTime?
+  createdAt  DateTime  @default(now())
 
   @@index([lobbyId])
 }

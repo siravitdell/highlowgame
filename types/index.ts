@@ -31,6 +31,7 @@ export interface Player {
   score: number;
   isHost: boolean;
   isReady: boolean;
+  finishedAt: string | null;
 }
 
 export interface Lobby {

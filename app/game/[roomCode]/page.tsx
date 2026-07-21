@@ -12,7 +12,6 @@ import { ROUNDS_PER_GAME, ROUND_TIMER_SECONDS, TIEBREAKER_TIMER_SECONDS } from "
 import type {
   Item,
   Lobby,
-  PlayerFinishedEvent,
   ScoreUpdateEvent,
   StoredSession,
   TiebreakerAnswerEvent,
@@ -69,7 +68,6 @@ export default function GamePage({ params }: GamePageProps) {
   const scoresRef = useRef(scores);
   const itemsPoolRef = useRef<Item[]>([]);
   const tiebreakCursorRef = useRef(0);
-  const finishedPlayersRef = useRef<Set<string>>(new Set());
   const gameResolvedRef = useRef(false);
   const tiebreakAnswersRef = useRef<Map<string, boolean>>(new Map());
   const tiebreakTiedIdsRef = useRef<string[]>([]);
@@ -159,6 +157,13 @@ export default function GamePage({ params }: GamePageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, tiebreakSecondsLeft, tiebreakAnswered]);
 
+  useEffect(() => {
+    if (!isHost || phase !== "waiting" || tiebreaker) return;
+    const poll = setInterval(() => checkCompletion(), 5000);
+    return () => clearInterval(poll);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHost, phase, tiebreaker, roomCode]);
+
   function getNextTiebreakPair(): [Item, Item] {
     const pool = itemsPoolRef.current;
     const i = tiebreakCursorRef.current;
@@ -188,23 +193,15 @@ export default function GamePage({ params }: GamePageProps) {
     );
   }
 
-  async function persistFinalResults(tiebreakerWinnerId?: string) {
-    if (!lobby) return;
+  async function markGameFinished(tiebreakerWinnerId?: string) {
     try {
       await fetch(`/api/lobby/${roomCode}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "finish-game",
-          results: lobby.players.map((p) => ({
-            playerId: p.id,
-            score: scoresRef.current[p.id]?.score ?? 0,
-          })),
-          tiebreakerWinnerId,
-        }),
+        body: JSON.stringify({ action: "finish-game", tiebreakerWinnerId }),
       });
     } catch (err) {
-      console.error("Failed to persist final results:", err);
+      console.error("Failed to mark game finished:", err);
     }
   }
 
@@ -223,7 +220,7 @@ export default function GamePage({ params }: GamePageProps) {
       const winnerId = correctPlayers[0];
       const username = lobby?.players.find((p) => p.id === winnerId)?.username ?? "";
       const result: TiebreakerResultEvent = { winnerId, username };
-      persistFinalResults(winnerId).then(() => publishSafe(channel, "tiebreaker-result", result));
+      markGameFinished(winnerId).then(() => publishSafe(channel, "tiebreaker-result", result));
     } else {
       const result: TiebreakerResultEvent = { stillTied: true };
       publishSafe(channel, "tiebreaker-result", result);
@@ -231,21 +228,31 @@ export default function GamePage({ params }: GamePageProps) {
     }
   }
 
-  function decideOutcome() {
-    if (!channel || !lobby || gameResolvedRef.current) return;
+  function decideOutcome(players: { id: string; score: number }[]) {
+    if (!channel || gameResolvedRef.current) return;
     gameResolvedRef.current = true;
 
-    const entries = lobby.players.map((p) => ({
-      playerId: p.id,
-      score: scoresRef.current[p.id]?.score ?? 0,
-    }));
-    const topScore = Math.max(...entries.map((e) => e.score), 0);
-    const tied = entries.filter((e) => e.score === topScore);
+    const topScore = Math.max(...players.map((p) => p.score), 0);
+    const tied = players.filter((p) => p.score === topScore);
 
     if (tied.length <= 1) {
-      persistFinalResults().then(() => publishSafe(channel, "game-end", {}));
+      markGameFinished().then(() => publishSafe(channel, "game-end", {}));
     } else {
-      startTiebreakerRound(tied.map((t) => t.playerId));
+      startTiebreakerRound(tied.map((t) => t.id));
+    }
+  }
+
+  async function checkCompletion() {
+    if (!isHost || gameResolvedRef.current) return;
+    try {
+      const res = await fetch(`/api/lobby/${roomCode}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { lobby: Lobby };
+      if (data.lobby.players.every((p) => p.finishedAt)) {
+        decideOutcome(data.lobby.players);
+      }
+    } catch (err) {
+      console.error("Failed to check game completion:", err);
     }
   }
 
@@ -260,12 +267,8 @@ export default function GamePage({ params }: GamePageProps) {
       }));
     };
 
-    const onPlayerFinished = (msg: Message) => {
-      const data = msg.data as PlayerFinishedEvent;
-      finishedPlayersRef.current.add(data.playerId);
-      if (isHost && finishedPlayersRef.current.size >= lobby.players.length) {
-        decideOutcome();
-      }
+    const onPlayerFinished = () => {
+      checkCompletion();
     };
 
     const onTiebreakerStart = (msg: Message) => {
@@ -361,6 +364,27 @@ export default function GamePage({ params }: GamePageProps) {
     }, 1500);
   }
 
+  async function markMyselfFinished(attempt = 1): Promise<boolean> {
+    if (!session) return false;
+    try {
+      const res = await fetch(`/api/lobby/${roomCode}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "player-finished",
+          playerId: session.playerId,
+          score: myScoreRef.current,
+        }),
+      });
+      if (res.ok) return true;
+    } catch (err) {
+      console.error("Failed to mark player finished:", err);
+    }
+    if (attempt >= 3) return false;
+    await new Promise((r) => setTimeout(r, 1000 * attempt));
+    return markMyselfFinished(attempt + 1);
+  }
+
   async function finishGame() {
     if (!session || !lobby || !channel) return;
 
@@ -380,7 +404,12 @@ export default function GamePage({ params }: GamePageProps) {
       }
     }
 
+    // The DB write is the source of truth for completion; the pub/sub
+    // publish below is just a low-latency hint to wake the host up sooner
+    // (checkCompletion is also polled as a fallback if this is dropped).
+    await markMyselfFinished();
     await publishSafe(channel, "player-finished", { playerId: session.playerId });
+    checkCompletion();
     setPhase("waiting");
   }
 

@@ -30,15 +30,11 @@ function isJoinLobbyBody(value: unknown): value is JoinLobbyBody {
   return typeof body.username === "string";
 }
 
-interface FinishGameResult {
-  playerId: string;
-  score: number;
-}
-
 interface UpdateLobbyBody {
-  action: "select-category" | "start-game" | "finish-game";
+  action: "select-category" | "start-game" | "player-finished" | "finish-game";
   categoryId?: string;
-  results?: FinishGameResult[];
+  playerId?: string;
+  score?: number;
   tiebreakerWinnerId?: string;
 }
 
@@ -48,20 +44,8 @@ function isUpdateLobbyBody(value: unknown): value is UpdateLobbyBody {
   return (
     body.action === "select-category" ||
     body.action === "start-game" ||
+    body.action === "player-finished" ||
     body.action === "finish-game"
-  );
-}
-
-function isFinishGameResults(value: unknown): value is FinishGameResult[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (r) =>
-        typeof r === "object" &&
-        r !== null &&
-        typeof (r as Record<string, unknown>).playerId === "string" &&
-        typeof (r as Record<string, unknown>).score === "number"
-    )
   );
 }
 
@@ -141,7 +125,10 @@ export async function PATCH(
     return NextResponse.json({ error: "invalid body" }, { status: 400 });
   }
 
-  const lobby = await prisma.lobby.findUnique({ where: { roomCode } });
+  const lobby = await prisma.lobby.findUnique({
+    where: { roomCode },
+    include: { players: true },
+  });
   if (!lobby) {
     return NextResponse.json({ error: "lobby not found" }, { status: 404 });
   }
@@ -190,23 +177,35 @@ export async function PATCH(
     return NextResponse.json({ status: "playing" });
   }
 
-  if (body.action === "finish-game") {
-    if (!isFinishGameResults(body.results)) {
-      return NextResponse.json({ error: "results are required" }, { status: 400 });
+  if (body.action === "player-finished") {
+    if (!body.playerId || typeof body.score !== "number") {
+      return NextResponse.json({ error: "playerId and score are required" }, { status: 400 });
+    }
+    if (!lobby.players.some((p) => p.id === body.playerId)) {
+      return NextResponse.json({ error: "player not in this lobby" }, { status: 404 });
     }
 
-    await prisma.$transaction([
-      ...body.results.map((r) =>
-        prisma.player.update({ where: { id: r.playerId }, data: { score: r.score } })
-      ),
-      prisma.lobby.update({
-        where: { id: lobby.id },
-        data: {
-          status: "finished",
-          tiebreakerWinnerId: body.tiebreakerWinnerId ?? null,
-        },
-      }),
-    ]);
+    await prisma.player.update({
+      where: { id: body.playerId },
+      data: { score: body.score, finishedAt: new Date() },
+    });
+
+    const updatedLobby = await prisma.lobby.findUnique({
+      where: { id: lobby.id },
+      include: { players: true, category: true },
+    });
+
+    return NextResponse.json({ lobby: updatedLobby });
+  }
+
+  if (body.action === "finish-game") {
+    await prisma.lobby.update({
+      where: { id: lobby.id },
+      data: {
+        status: "finished",
+        tiebreakerWinnerId: body.tiebreakerWinnerId ?? null,
+      },
+    });
 
     return NextResponse.json({ status: "finished" });
   }
