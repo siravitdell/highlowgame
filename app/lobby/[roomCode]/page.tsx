@@ -6,6 +6,8 @@ import type Ably from "ably";
 type Message = Ably.Types.Message;
 import { PlayerList } from "@/components/PlayerList";
 import { CategoryPicker } from "@/components/CategoryPicker";
+import { ConnectionBanner } from "@/components/ConnectionBanner";
+import { Skeleton } from "@/components/Skeleton";
 import { useAblyChannel } from "@/lib/useAblyChannel";
 import type {
   Category,
@@ -33,7 +35,10 @@ export default function LobbyPage({ params }: LobbyPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const channel = useAblyChannel(`room:${roomCode}`, session?.playerId ?? "guest");
+  const { channel, connectionState } = useAblyChannel(
+    `room:${roomCode}`,
+    session?.playerId ?? "guest"
+  );
 
   useEffect(() => {
     const raw = localStorage.getItem("hol-session");
@@ -225,8 +230,10 @@ export default function LobbyPage({ params }: LobbyPageProps) {
 
   if (!lobby || !sessionChecked) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-gray-500">Loading lobby…</p>
+      <div className="mx-auto w-full max-w-2xl flex-1 px-4 py-10">
+        <Skeleton className="mb-6 h-24 w-full" />
+        <Skeleton className="mb-6 h-40 w-full" />
+        <Skeleton className="h-32 w-full" />
       </div>
     );
   }
@@ -282,9 +289,10 @@ export default function LobbyPage({ params }: LobbyPageProps) {
 
   return (
     <div className="mx-auto w-full max-w-2xl flex-1 px-4 py-10">
+      <ConnectionBanner connectionState={connectionState} />
       <div className="mb-6 rounded-2xl bg-white p-6 shadow">
         <h1 className="mb-2 text-2xl font-bold">Room {roomCode}</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <input
             readOnly
             value={inviteLink}

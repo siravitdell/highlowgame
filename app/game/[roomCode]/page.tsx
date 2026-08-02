@@ -2,12 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { AnimatePresence, motion } from "framer-motion";
 import type Ably from "ably";
 type Message = Ably.Types.Message;
 import { useAblyChannel } from "@/lib/useAblyChannel";
 import { seededRandom } from "@/lib/seededRandom";
 import { ScoreboardStrip } from "@/components/ScoreboardStrip";
 import { Timer } from "@/components/Timer";
+import { ConnectionBanner } from "@/components/ConnectionBanner";
+import { Skeleton } from "@/components/Skeleton";
 import { ROUNDS_PER_GAME, ROUND_TIMER_SECONDS, TIEBREAKER_TIMER_SECONDS } from "@/lib/categories";
 import type {
   Item,
@@ -92,7 +95,10 @@ export default function GamePage({ params }: GamePageProps) {
   const [tiebreakAnswered, setTiebreakAnswered] = useState(false);
   const [tiebreakSecondsLeft, setTiebreakSecondsLeft] = useState(TIEBREAKER_TIMER_SECONDS);
 
-  const channel = useAblyChannel(`room:${roomCode}`, session?.playerId ?? "guest");
+  const { channel, connectionState } = useAblyChannel(
+    `room:${roomCode}`,
+    session?.playerId ?? "guest"
+  );
   const myScoreRef = useRef(0);
   const scoresRef = useRef(scores);
   const itemsPoolRef = useRef<Item[]>([]);
@@ -517,15 +523,21 @@ export default function GamePage({ params }: GamePageProps) {
 
   if (!lobby || phase === "loading") {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-gray-500">Loading game…</p>
+      <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-4 w-full" />
+        <div className="flex flex-col gap-4 sm:flex-row">
+          <Skeleton className="h-40 flex-1" />
+          <Skeleton className="h-40 flex-1" />
+        </div>
       </div>
     );
   }
 
   if (phase === "waiting") {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4">
+      <div className="flex flex-1 flex-col items-center justify-center gap-4 px-4">
+        <ConnectionBanner connectionState={connectionState} />
         <p className="text-lg text-gray-600">
           {tiebreaker ? "Waiting for tiebreaker…" : "Waiting for other players to finish…"}
         </p>
@@ -547,22 +559,23 @@ export default function GamePage({ params }: GamePageProps) {
   if (phase === "tiebreaker" && tiebreaker) {
     const { itemA, itemB } = tiebreaker.question;
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-amber-50 px-4">
+      <div className="flex flex-1 flex-col items-center justify-center gap-6 bg-amber-50 px-4 py-8">
+        <ConnectionBanner connectionState={connectionState} />
         <h2 className="text-2xl font-bold text-amber-700">⚡ Tiebreaker Round ⚡</h2>
         <Timer secondsLeft={tiebreakSecondsLeft} totalSeconds={TIEBREAKER_TIMER_SECONDS} />
-        <div className="flex w-full max-w-2xl gap-4">
-          <div className="flex-1 rounded-2xl bg-white p-6 text-center shadow">
+        <div className="flex w-full max-w-2xl flex-col gap-4 sm:flex-row">
+          <div className="flex-1 rounded-2xl bg-white p-4 text-center shadow sm:p-6">
             <p className="text-lg font-semibold">{itemA.name}</p>
-            <p className="mt-2 text-3xl font-bold text-amber-600">
+            <p className="mt-2 text-2xl font-bold text-amber-600 sm:text-3xl">
               {itemA.value.toLocaleString()} {itemA.unit}
             </p>
           </div>
-          <div className="flex-1 rounded-2xl bg-white p-6 text-center shadow">
+          <div className="flex-1 rounded-2xl bg-white p-4 text-center shadow sm:p-6">
             <p className="text-lg font-semibold">{itemB.name}</p>
-            <p className="mt-2 text-3xl font-bold text-gray-400">?</p>
+            <p className="mt-2 text-2xl font-bold text-gray-400 sm:text-3xl">?</p>
           </div>
         </div>
-        <div className="flex gap-4">
+        <div className="flex w-full max-w-xs flex-col gap-3 sm:max-w-none sm:flex-row sm:gap-4">
           <button
             onClick={() => handleTiebreakerAnswer("higher")}
             disabled={tiebreakAnswered}
@@ -597,6 +610,7 @@ export default function GamePage({ params }: GamePageProps) {
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-4 py-8">
+      <ConnectionBanner connectionState={connectionState} />
       <ScoreboardStrip
         scores={Object.entries(scores).map(([playerId, s]) => ({ playerId, ...s }))}
       />
@@ -614,36 +628,46 @@ export default function GamePage({ params }: GamePageProps) {
         </p>
       )}
 
-      <div className="flex gap-4">
-        <div className="flex-1 rounded-2xl bg-white p-6 text-center shadow">
+      <div className="flex flex-col gap-4 sm:flex-row">
+        <div className="flex-1 rounded-2xl bg-white p-4 text-center shadow sm:p-6">
           <p className="text-lg font-semibold">{itemA.name}</p>
-          <p className="mt-2 text-3xl font-bold text-indigo-600">
+          <p className="mt-2 text-2xl font-bold text-indigo-600 sm:text-3xl">
             {itemA.value.toLocaleString()} {itemA.unit}
           </p>
         </div>
-        <div className="relative flex-1 rounded-2xl bg-white p-6 text-center shadow">
+        <div className="relative flex-1 overflow-hidden rounded-2xl bg-white p-4 text-center shadow sm:p-6">
           <p className="text-lg font-semibold">{itemB.name}</p>
-          <p
-            className={`mt-2 text-3xl font-bold ${
+          <motion.p
+            key={revealed ? "revealed" : "hidden"}
+            initial={{ opacity: 0, scale: 0.85 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.25 }}
+            className={`mt-2 text-2xl font-bold sm:text-3xl ${
               revealed ? "text-indigo-600" : "text-gray-300"
             }`}
           >
             {revealed ? `${itemB.value.toLocaleString()} ${itemB.unit}` : "???"}
-          </p>
-          {revealed && (
-            <div
-              className={`absolute inset-0 flex items-center justify-center rounded-2xl text-5xl ${
-                lastCorrect ? "bg-green-500/80" : "bg-red-500/80"
-              }`}
-            >
-              {lastCorrect ? "✅" : "❌"}
-            </div>
-          )}
+          </motion.p>
+          <AnimatePresence>
+            {revealed && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.6 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.3, ease: "easeOut" }}
+                className={`absolute inset-0 flex items-center justify-center rounded-2xl text-5xl ${
+                  lastCorrect ? "bg-green-500/80" : "bg-red-500/80"
+                }`}
+              >
+                {lastCorrect ? "✅" : "❌"}
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </div>
 
       {!revealed && (
-        <div className="flex gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:gap-4">
           <button
             onClick={() => handleAnswer("higher")}
             className="flex-1 rounded-lg bg-indigo-600 py-3 font-semibold text-white hover:bg-indigo-700"

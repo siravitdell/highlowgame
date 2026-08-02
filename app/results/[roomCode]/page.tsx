@@ -2,9 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { motion } from "framer-motion";
 import type Ably from "ably";
 type Message = Ably.Types.Message;
 import { useAblyChannel } from "@/lib/useAblyChannel";
+import { ConnectionBanner } from "@/components/ConnectionBanner";
+import { Skeleton } from "@/components/Skeleton";
 import type { Lobby, PlayAgainEvent, Score, StoredSession } from "@/types";
 
 interface ResultsPageProps {
@@ -23,7 +26,10 @@ export default function ResultsPage({ params }: ResultsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [creatingLobby, setCreatingLobby] = useState(false);
 
-  const channel = useAblyChannel(`room:${roomCode}`, session?.playerId ?? "guest");
+  const { channel, connectionState } = useAblyChannel(
+    `room:${roomCode}`,
+    session?.playerId ?? "guest"
+  );
 
   useEffect(() => {
     const raw = localStorage.getItem("hol-session");
@@ -127,8 +133,10 @@ export default function ResultsPage({ params }: ResultsPageProps) {
 
   if (!lobby || !session) {
     return (
-      <div className="flex flex-1 items-center justify-center">
-        <p className="text-gray-500">Loading results…</p>
+      <div className="mx-auto w-full max-w-2xl flex-1 px-4 py-10">
+        <Skeleton className="mx-auto mb-8 h-8 w-48" />
+        <Skeleton className="mb-6 h-32 w-full" />
+        <Skeleton className="h-40 w-full" />
       </div>
     );
   }
@@ -139,24 +147,28 @@ export default function ResultsPage({ params }: ResultsPageProps) {
 
   return (
     <div className="mx-auto w-full max-w-2xl flex-1 px-4 py-10">
+      <ConnectionBanner connectionState={connectionState} />
       <h1 className="mb-6 text-center text-3xl font-bold">🏁 Game Over</h1>
 
       {podium.length > 0 && (
-        <div className="mb-8 flex items-end justify-center gap-4">
+        <div className="mb-8 flex items-end justify-center gap-2 sm:gap-4">
           {podium.map((p, i) => (
-            <div
+            <motion.div
               key={p.id}
-              className={`flex flex-col items-center rounded-2xl bg-white p-4 shadow ${
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.15, duration: 0.3 }}
+              className={`flex flex-col items-center rounded-2xl bg-white p-3 shadow sm:p-4 ${
                 i === 0 ? "order-2 pb-8" : i === 1 ? "order-1" : "order-3"
               }`}
             >
               <span className="text-3xl">{MEDALS[i]}</span>
-              <p className="mt-1 font-semibold">
+              <p className="mt-1 text-center font-semibold">
                 {p.username}
                 {lobby.tiebreakerWinnerId === p.id && " ⚡"}
               </p>
               <p className="text-indigo-600">{p.score} pts</p>
-            </div>
+            </motion.div>
           ))}
         </div>
       )}

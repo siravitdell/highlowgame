@@ -3,11 +3,16 @@
 import { useEffect, useRef, useState } from "react";
 import Ably from "ably/promises";
 
-export function useAblyChannel(
-  channelName: string,
-  clientId: string
-): Ably.Types.RealtimeChannelPromise | null {
+export interface AblyChannelState {
+  channel: Ably.Types.RealtimeChannelPromise | null;
+  connectionState: Ably.Types.ConnectionState;
+}
+
+export function useAblyChannel(channelName: string, clientId: string): AblyChannelState {
   const [channel, setChannel] = useState<Ably.Types.RealtimeChannelPromise | null>(null);
+  const [connectionState, setConnectionState] = useState<Ably.Types.ConnectionState>(
+    "initialized"
+  );
   const clientRef = useRef<Ably.Types.RealtimePromise | null>(null);
 
   useEffect(() => {
@@ -15,6 +20,9 @@ export function useAblyChannel(
       authUrl: `/api/ably/token?clientId=${encodeURIComponent(clientId)}`,
     });
     clientRef.current = client;
+    setConnectionState(client.connection.state);
+    client.connection.on((stateChange) => setConnectionState(stateChange.current));
+
     const ch = client.channels.get(channelName);
     setChannel(ch);
 
@@ -23,5 +31,5 @@ export function useAblyChannel(
     };
   }, [channelName, clientId]);
 
-  return channel;
+  return { channel, connectionState };
 }
