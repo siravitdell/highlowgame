@@ -55,6 +55,24 @@ async function publishSafe(
   }
 }
 
+async function publishWithRetry(
+  channel: Ably.Types.RealtimeChannelPromise,
+  event: string,
+  data: unknown,
+  attempts = 4
+) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      await channel.publish(event, data);
+      return true;
+    } catch (err) {
+      console.error(`Failed to publish "${event}" (attempt ${i}/${attempts}):`, err);
+      if (i < attempts) await new Promise((r) => setTimeout(r, 500 * i));
+    }
+  }
+  return false;
+}
+
 export default function GamePage({ params }: GamePageProps) {
   const { roomCode } = params;
   const router = useRouter();
@@ -179,6 +197,28 @@ export default function GamePage({ params }: GamePageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isHost, phase, tiebreaker, roomCode]);
 
+  // Fallback for every client (not just host): if the game-end /
+  // tiebreaker-result broadcast itself gets dropped, poll the DB
+  // directly so we still navigate once the host has actually resolved
+  // the game, instead of waiting forever for a message that never came.
+  useEffect(() => {
+    if (phase !== "waiting" && phase !== "tiebreaker") return;
+    const poll = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/lobby/${roomCode}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { lobby: Lobby };
+        if (data.lobby.status === "finished") {
+          setPhase("done");
+          router.push(`/results/${roomCode}`);
+        }
+      } catch (err) {
+        console.error("Failed to poll lobby status:", err);
+      }
+    }, 5000);
+    return () => clearInterval(poll);
+  }, [phase, roomCode, router]);
+
   function getNextTiebreakPair(): [Item, Item] {
     const pool = itemsPoolRef.current;
     const i = tiebreakCursorRef.current;
@@ -199,7 +239,7 @@ export default function GamePage({ params }: GamePageProps) {
       tiedPlayerIds,
       question: { itemA, itemB },
     };
-    publishSafe(channel, "tiebreaker-start", event);
+    publishWithRetry(channel, "tiebreaker-start", event);
 
     if (tiebreakTimeoutRef.current) clearTimeout(tiebreakTimeoutRef.current);
     tiebreakTimeoutRef.current = setTimeout(
@@ -235,10 +275,10 @@ export default function GamePage({ params }: GamePageProps) {
       const winnerId = correctPlayers[0];
       const username = lobby?.players.find((p) => p.id === winnerId)?.username ?? "";
       const result: TiebreakerResultEvent = { winnerId, username };
-      markGameFinished(winnerId).then(() => publishSafe(channel, "tiebreaker-result", result));
+      markGameFinished(winnerId).then(() => publishWithRetry(channel, "tiebreaker-result", result));
     } else {
       const result: TiebreakerResultEvent = { stillTied: true };
-      publishSafe(channel, "tiebreaker-result", result);
+      publishWithRetry(channel, "tiebreaker-result", result);
       setTimeout(() => startTiebreakerRound(tiedIds), 1200);
     }
   }
@@ -440,7 +480,7 @@ export default function GamePage({ params }: GamePageProps) {
         (guess === "lower" && itemB.value <= itemA.value));
 
     const event: TiebreakerAnswerEvent = { playerId: session.playerId, correct };
-    await publishSafe(channel, "tiebreaker-answer", event);
+    await publishWithRetry(channel, "tiebreaker-answer", event);
   }
 
   if (!lobby || phase === "loading") {
