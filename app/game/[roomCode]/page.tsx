@@ -23,6 +23,17 @@ interface GamePageProps {
   params: { roomCode: string };
 }
 
+function dedupeByValue(items: Item[]): Item[] {
+  const seen = new Set<number>();
+  const result: Item[] = [];
+  for (const item of items) {
+    if (seen.has(item.value)) continue;
+    seen.add(item.value);
+    result.push(item);
+  }
+  return result;
+}
+
 function shuffle<T>(items: T[], rand: () => number): T[] {
   const arr = [...items];
   for (let i = arr.length - 1; i > 0; i--) {
@@ -111,8 +122,12 @@ export default function GamePage({ params }: GamePageProps) {
       );
       const itemsData = (await itemsRes.json()) as { items: Item[] };
 
+      // Items with equal values would make a round unanswerable-wrong
+      // (both "higher" and "lower" satisfy >= / <=), so dedupe by value
+      // before pairing — every pair is then guaranteed to have a real answer.
+      const deduped = dedupeByValue(itemsData.items);
       const rand = seededRandom(roomCode);
-      const shuffled = shuffle(itemsData.items, rand);
+      const shuffled = shuffle(deduped, rand);
       itemsPoolRef.current = shuffled;
 
       const builtPairs: [Item, Item][] = [];
