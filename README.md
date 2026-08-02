@@ -1,5 +1,7 @@
 # Higher or Lower
 
+**🎮 Live: [highorlowgame.vercel.app](https://highorlowgame.vercel.app/)**
+
 A realtime multiplayer web guessing game — compare countries, cities, mountains, planets, and movies by a metric (population, area, GDP, height, box office, etc.) and guess whether the next item is higher or lower. Play in a shared room with friends; scores sync live, and ties are broken with a sudden-death bonus round.
 
 ## Features
@@ -90,4 +92,4 @@ See [CLAUDE.md](./CLAUDE.md) for the full architecture reference (routes, DB sch
 
 ## Project status
 
-All 8 phases from [phases.md](./phases.md) are implemented and tested against a real Postgres + Ably setup: project scaffolding, seed data, API routes, lobby UI, core game loop, tiebreaker, results page, and polish (responsive UI, loading states, connection-loss handling, animations). Deployment (Vercel + Neon) is documented above but not yet performed — that step needs your own hosting accounts.
+All 8 phases from [phases.md](./phases.md) are complete and live: project scaffolding, seed data, API routes, lobby UI, core game loop, tiebreaker, results page, polish (responsive UI, loading states, connection-loss handling, animations), and deployment to Vercel + Neon Postgres.
