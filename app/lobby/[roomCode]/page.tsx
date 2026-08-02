@@ -23,6 +23,10 @@ export default function LobbyPage({ params }: LobbyPageProps) {
   const router = useRouter();
 
   const [session, setSession] = useState<StoredSession | null>(null);
+  const [sessionChecked, setSessionChecked] = useState(false);
+  const [joinUsername, setJoinUsername] = useState("");
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
   const [lobby, setLobby] = useState<Lobby | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [copied, setCopied] = useState(false);
@@ -36,11 +40,42 @@ export default function LobbyPage({ params }: LobbyPageProps) {
       const stored = JSON.parse(raw) as StoredSession;
       if (stored.roomCode === roomCode) {
         setSession(stored);
-        return;
       }
     }
-    router.push("/");
-  }, [roomCode, router]);
+    setSessionChecked(true);
+  }, [roomCode]);
+
+  async function handleJoinViaLink() {
+    if (!joinUsername.trim()) {
+      setJoinError("Enter a username first");
+      return;
+    }
+    setJoining(true);
+    setJoinError(null);
+    try {
+      const res = await fetch(`/api/lobby/${roomCode}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: joinUsername }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        throw new Error(data.error ?? "Could not join lobby");
+      }
+      const data = (await res.json()) as { playerId: string };
+      const newSession: StoredSession = {
+        username: joinUsername,
+        playerId: data.playerId,
+        roomCode,
+      };
+      localStorage.setItem("hol-session", JSON.stringify(newSession));
+      setSession(newSession);
+    } catch (err) {
+      setJoinError(err instanceof Error ? err.message : "Could not join lobby");
+    } finally {
+      setJoining(false);
+    }
+  }
 
   useEffect(() => {
     async function loadLobby() {
@@ -93,7 +128,7 @@ export default function LobbyPage({ params }: LobbyPageProps) {
     };
 
     const onGameStart = () => {
-      router.push(`/game/${roomCode}`);
+      if (session) router.push(`/game/${roomCode}`);
     };
 
     channel.subscribe("player-joined", onPlayerJoined);
@@ -105,7 +140,7 @@ export default function LobbyPage({ params }: LobbyPageProps) {
       channel.unsubscribe("category-selected", onCategorySelected);
       channel.unsubscribe("game-start", onGameStart);
     };
-  }, [channel, roomCode, router]);
+  }, [channel, roomCode, router, session]);
 
   const currentPlayer = lobby?.players.find((p) => p.id === session?.playerId);
   const isHost = currentPlayer?.isHost ?? false;
@@ -148,10 +183,59 @@ export default function LobbyPage({ params }: LobbyPageProps) {
     );
   }
 
-  if (!lobby) {
+  if (!lobby || !sessionChecked) {
     return (
       <div className="flex flex-1 items-center justify-center">
         <p className="text-gray-500">Loading lobby…</p>
+      </div>
+    );
+  }
+
+  if (!session) {
+    if (lobby.status !== "waiting") {
+      return (
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-red-600">
+            This game has already started — ask the host for a new invite once it finishes.
+          </p>
+        </div>
+      );
+    }
+
+    if (lobby.players.length >= 8) {
+      return (
+        <div className="flex flex-1 items-center justify-center">
+          <p className="text-red-600">This lobby is full (8/8 players).</p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="flex flex-1 items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-2xl bg-white p-8 shadow-lg">
+          <h1 className="mb-1 text-center text-2xl font-bold">Join Room {roomCode}</h1>
+          <p className="mb-6 text-center text-gray-500">
+            Enter a username to join this lobby.
+          </p>
+          <input
+            className="mb-4 w-full rounded-lg border border-gray-300 px-3 py-2 focus:border-indigo-500 focus:outline-none"
+            value={joinUsername}
+            onChange={(e) => setJoinUsername(e.target.value)}
+            placeholder="Your name"
+            maxLength={20}
+            onKeyDown={(e) => e.key === "Enter" && handleJoinViaLink()}
+          />
+          <button
+            onClick={handleJoinViaLink}
+            disabled={joining}
+            className="w-full rounded-lg bg-indigo-600 py-2 font-semibold text-white transition hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {joining ? "Joining…" : "Join Lobby"}
+          </button>
+          {joinError && (
+            <p className="mt-4 text-center text-sm text-red-600">{joinError}</p>
+          )}
+        </div>
       </div>
     );
   }
