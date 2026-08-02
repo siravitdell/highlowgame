@@ -30,12 +30,18 @@ function isJoinLobbyBody(value: unknown): value is JoinLobbyBody {
   return typeof body.username === "string";
 }
 
+interface ScoreUpdate {
+  playerId: string;
+  score: number;
+}
+
 interface UpdateLobbyBody {
   action: "select-category" | "start-game" | "player-finished" | "finish-game";
   categoryId?: string;
   playerId?: string;
   score?: number;
   tiebreakerWinnerId?: string;
+  scoreUpdates?: ScoreUpdate[];
 }
 
 function isUpdateLobbyBody(value: unknown): value is UpdateLobbyBody {
@@ -46,6 +52,19 @@ function isUpdateLobbyBody(value: unknown): value is UpdateLobbyBody {
     body.action === "start-game" ||
     body.action === "player-finished" ||
     body.action === "finish-game"
+  );
+}
+
+function isScoreUpdates(value: unknown): value is ScoreUpdate[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (r) =>
+        typeof r === "object" &&
+        r !== null &&
+        typeof (r as Record<string, unknown>).playerId === "string" &&
+        typeof (r as Record<string, unknown>).score === "number"
+    )
   );
 }
 
@@ -199,13 +218,22 @@ export async function PATCH(
   }
 
   if (body.action === "finish-game") {
-    await prisma.lobby.update({
-      where: { id: lobby.id },
-      data: {
-        status: "finished",
-        tiebreakerWinnerId: body.tiebreakerWinnerId ?? null,
-      },
-    });
+    if (body.scoreUpdates !== undefined && !isScoreUpdates(body.scoreUpdates)) {
+      return NextResponse.json({ error: "invalid scoreUpdates" }, { status: 400 });
+    }
+
+    await prisma.$transaction([
+      ...(body.scoreUpdates ?? []).map((s) =>
+        prisma.player.update({ where: { id: s.playerId }, data: { score: s.score } })
+      ),
+      prisma.lobby.update({
+        where: { id: lobby.id },
+        data: {
+          status: "finished",
+          tiebreakerWinnerId: body.tiebreakerWinnerId ?? null,
+        },
+      }),
+    ]);
 
     return NextResponse.json({ status: "finished" });
   }

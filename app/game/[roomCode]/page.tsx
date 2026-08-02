@@ -99,6 +99,7 @@ export default function GamePage({ params }: GamePageProps) {
   const tiebreakCursorRef = useRef(0);
   const gameResolvedRef = useRef(false);
   const tiebreakAnswersRef = useRef<Map<string, boolean>>(new Map());
+  const tiebreakScoresRef = useRef<Map<string, number>>(new Map());
   const tiebreakTiedIdsRef = useRef<string[]>([]);
   const tiebreakResolvedRef = useRef(true);
   const tiebreakTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,12 +249,15 @@ export default function GamePage({ params }: GamePageProps) {
     );
   }
 
-  async function markGameFinished(tiebreakerWinnerId?: string) {
+  async function markGameFinished(
+    tiebreakerWinnerId?: string,
+    scoreUpdates?: { playerId: string; score: number }[]
+  ) {
     try {
       await fetch(`/api/lobby/${roomCode}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "finish-game", tiebreakerWinnerId }),
+        body: JSON.stringify({ action: "finish-game", tiebreakerWinnerId, scoreUpdates }),
       });
     } catch (err) {
       console.error("Failed to mark game finished:", err);
@@ -269,17 +273,37 @@ export default function GamePage({ params }: GamePageProps) {
     }
 
     const tiedIds = tiebreakTiedIdsRef.current;
-    const correctPlayers = tiedIds.filter((id) => tiebreakAnswersRef.current.get(id) === true);
 
-    if (correctPlayers.length === 1) {
-      const winnerId = correctPlayers[0];
+    // Award a point to whoever answered correctly this round. If the
+    // tied players answered differently, this diverges their scores
+    // immediately and whoever's ahead wins; if they matched (both
+    // right or both wrong), scores stay level and we go another round.
+    for (const id of tiedIds) {
+      if (tiebreakAnswersRef.current.get(id) === true) {
+        tiebreakScoresRef.current.set(id, (tiebreakScoresRef.current.get(id) ?? 0) + 1);
+      }
+    }
+
+    const topScore = Math.max(...tiedIds.map((id) => tiebreakScoresRef.current.get(id) ?? 0));
+    const stillTiedIds = tiedIds.filter(
+      (id) => (tiebreakScoresRef.current.get(id) ?? 0) === topScore
+    );
+
+    if (stillTiedIds.length === 1) {
+      const winnerId = stillTiedIds[0];
       const username = lobby?.players.find((p) => p.id === winnerId)?.username ?? "";
       const result: TiebreakerResultEvent = { winnerId, username };
-      markGameFinished(winnerId).then(() => publishWithRetry(channel, "tiebreaker-result", result));
+      const scoreUpdates = tiedIds.map((id) => ({
+        playerId: id,
+        score: tiebreakScoresRef.current.get(id) ?? 0,
+      }));
+      markGameFinished(winnerId, scoreUpdates).then(() =>
+        publishWithRetry(channel, "tiebreaker-result", result)
+      );
     } else {
       const result: TiebreakerResultEvent = { stillTied: true };
       publishWithRetry(channel, "tiebreaker-result", result);
-      setTimeout(() => startTiebreakerRound(tiedIds), 1200);
+      setTimeout(() => startTiebreakerRound(stillTiedIds), 1200);
     }
   }
 
@@ -293,6 +317,7 @@ export default function GamePage({ params }: GamePageProps) {
     if (tied.length <= 1) {
       markGameFinished().then(() => publishSafe(channel, "game-end", {}));
     } else {
+      tiebreakScoresRef.current = new Map(tied.map((p) => [p.id, p.score]));
       startTiebreakerRound(tied.map((t) => t.id));
     }
   }
