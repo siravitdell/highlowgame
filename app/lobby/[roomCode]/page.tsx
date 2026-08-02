@@ -31,6 +31,7 @@ export default function LobbyPage({ params }: LobbyPageProps) {
   const [categories, setCategories] = useState<Category[]>([]);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const channel = useAblyChannel(`room:${roomCode}`, session?.playerId ?? "guest");
 
@@ -131,14 +132,27 @@ export default function LobbyPage({ params }: LobbyPageProps) {
       if (session) router.push(`/game/${roomCode}`);
     };
 
+    const onLobbyDeleted = () => {
+      const raw = localStorage.getItem("hol-session");
+      if (raw) {
+        const stored = JSON.parse(raw) as StoredSession;
+        if (stored.roomCode === roomCode) {
+          localStorage.removeItem("hol-session");
+        }
+      }
+      setError("The host deleted this room.");
+    };
+
     channel.subscribe("player-joined", onPlayerJoined);
     channel.subscribe("category-selected", onCategorySelected);
     channel.subscribe("game-start", onGameStart);
+    channel.subscribe("lobby-deleted", onLobbyDeleted);
 
     return () => {
       channel.unsubscribe("player-joined", onPlayerJoined);
       channel.unsubscribe("category-selected", onCategorySelected);
       channel.unsubscribe("game-start", onGameStart);
+      channel.unsubscribe("lobby-deleted", onLobbyDeleted);
     };
   }, [channel, roomCode, router, session]);
 
@@ -173,6 +187,32 @@ export default function LobbyPage({ params }: LobbyPageProps) {
     navigator.clipboard.writeText(inviteLink);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function handleDeleteRoom() {
+    if (!session) return;
+    if (!window.confirm("Delete this room? This can't be undone and removes all players.")) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/lobby/${roomCode}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ playerId: session.playerId }),
+      });
+      if (!res.ok) {
+        const data = (await res.json()) as { error?: string };
+        setError(data.error ?? "Could not delete room");
+        setDeleting(false);
+        return;
+      }
+      localStorage.removeItem("hol-session");
+      router.push("/");
+    } catch {
+      setError("Could not delete room");
+      setDeleting(false);
+    }
   }
 
   if (error) {
@@ -284,13 +324,22 @@ export default function LobbyPage({ params }: LobbyPageProps) {
       </div>
 
       {isHost && (
-        <button
-          onClick={handleStartGame}
-          disabled={!lobby.categoryId}
-          className="w-full rounded-lg bg-green-600 py-3 font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-        >
-          Start Game
-        </button>
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={handleStartGame}
+            disabled={!lobby.categoryId}
+            className="w-full rounded-lg bg-green-600 py-3 font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+          >
+            Start Game
+          </button>
+          <button
+            onClick={handleDeleteRoom}
+            disabled={deleting}
+            className="w-full rounded-lg border border-red-300 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 disabled:opacity-50"
+          >
+            {deleting ? "Deleting…" : "Delete Room"}
+          </button>
+        </div>
       )}
     </div>
   );

@@ -387,12 +387,18 @@ export default function GamePage({ params }: GamePageProps) {
       router.push(`/results/${roomCode}`);
     };
 
+    const onLobbyDeleted = () => {
+      localStorage.removeItem("hol-session");
+      router.push("/");
+    };
+
     channel.subscribe("score-update", onScoreUpdate);
     channel.subscribe("player-finished", onPlayerFinished);
     channel.subscribe("tiebreaker-start", onTiebreakerStart);
     channel.subscribe("tiebreaker-answer", onTiebreakerAnswer);
     channel.subscribe("tiebreaker-result", onTiebreakerResult);
     channel.subscribe("game-end", onGameEnd);
+    channel.subscribe("lobby-deleted", onLobbyDeleted);
 
     return () => {
       channel.unsubscribe("score-update", onScoreUpdate);
@@ -401,6 +407,7 @@ export default function GamePage({ params }: GamePageProps) {
       channel.unsubscribe("tiebreaker-answer", onTiebreakerAnswer);
       channel.unsubscribe("tiebreaker-result", onTiebreakerResult);
       channel.unsubscribe("game-end", onGameEnd);
+      channel.unsubscribe("lobby-deleted", onLobbyDeleted);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel, lobby, session, roomCode, router, isHost]);

@@ -62,7 +62,7 @@ model Player {
   id         String    @id @default(cuid())
   username   String
   lobbyId    String
-  lobby      Lobby     @relation(fields: [lobbyId], references: [id])
+  lobby      Lobby     @relation(fields: [lobbyId], references: [id], onDelete: Cascade)
   score      Int       @default(0)
   isHost     Boolean   @default(false)
   isReady    Boolean   @default(false)

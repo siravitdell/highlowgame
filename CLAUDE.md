@@ -96,6 +96,8 @@ Five models: `Category`, `Item`, `Score`, `Lobby`, `Player`.
 - `POST /api/lobby` — create lobby `{ username, categoryId }` → returns `{ roomCode, playerId }`
 - `GET /api/lobby/[roomCode]` — get lobby state (players, status, category)
 - `POST /api/lobby/[roomCode]` — join lobby `{ username }` → returns `{ playerId }`
+- `PATCH /api/lobby/[roomCode]` — `{ action }` where action is `select-category`, `start-game`, `player-finished`, or `finish-game`
+- `DELETE /api/lobby/[roomCode]` — host-only `{ playerId }`; deletes the lobby (cascades players) and broadcasts `lobby-deleted`
 - `GET /api/ably/token` — returns Ably token request for client auth
 
 ## External Data Sources

@@ -240,3 +240,40 @@ export async function PATCH(
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });
 }
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ roomCode: string }> }
+) {
+  const { roomCode } = await params;
+  const body: unknown = await request.json().catch(() => null);
+  const playerId =
+    body && typeof body === "object" && typeof (body as Record<string, unknown>).playerId === "string"
+      ? (body as { playerId: string }).playerId
+      : null;
+
+  if (!playerId) {
+    return NextResponse.json({ error: "playerId is required" }, { status: 400 });
+  }
+
+  const lobby = await prisma.lobby.findUnique({
+    where: { roomCode },
+    include: { players: true },
+  });
+  if (!lobby) {
+    return NextResponse.json({ error: "lobby not found" }, { status: 404 });
+  }
+
+  const requester = lobby.players.find((p) => p.id === playerId);
+  if (!requester?.isHost) {
+    return NextResponse.json({ error: "only the host can delete this lobby" }, { status: 403 });
+  }
+
+  const ably = getAblyRest();
+  const channel = ably.channels.get(`room:${roomCode}`);
+  await publishBestEffort(channel, "lobby-deleted", {});
+
+  await prisma.lobby.delete({ where: { id: lobby.id } });
+
+  return NextResponse.json({ status: "deleted" });
+}
